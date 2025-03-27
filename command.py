@@ -4,6 +4,7 @@ from ntfs import NTFS
 from offset_reader import read_offset_in_hex, read_offset_in_dec, read_offset_in_string, print_hex
 from converter import byte_converter
 import datetime
+import subprocess
 
 def partition_selection():
     # Ask user to input a valid drive letter
@@ -73,17 +74,22 @@ def deleted_files(instance, mode = "quick"):
 
 def partition_process():
     print("------------------------------------------------")
-    print("     Nguyen Dinh Nhan's Disk Recovery Tool")
     disk = partition_selection()
     #print_hex(read_offset_in_hex(disk['disk'], disk['first_offset'], 512)) # Print master boot sector
 
     if disk['format'] == "FAT32":
         instance = FAT32(disk = disk['disk'], first_offset = disk['first_offset'])
     else:
-        instance = NTFS(disk = disk['disk'], first_offset = disk['first_offset'])
-
-    del_items = deleted_files(instance) # Scan RDET first by default
-
+        # instance = NTFS(disk = disk['disk'], first_offset = disk['first_offset'])
+        print("Đã chọn ổ NTFS. Sử dụng ntfsrecover.py để phục hồi.")
+        pattern = input("Nhập mẫu để phục hồi (ví dụ: *.jpg): ")
+        outdir = input("Nhập thư mục đích: ").rstrip('"')
+        cmd = ['python', 'ntfsrecover.py', f"\\\\.\\{disk['letter']}", '--pattern', pattern, '--outdir', outdir]
+        subprocess.run(cmd, check=True)
+        return
+       
+ 
+    #del_items = deleted_files(instance) # Scan RDET first by defaultelif format == "NTFS":
     while True:
         print("------------------------------------------------")
         print("Choose any files to recover by typing their file indexes (eg. 4 17)")
@@ -145,4 +151,3 @@ def partition_process():
             print("Something went wrong... Please try again")
             print(f"Error: {e}")
         print("\nDone\nComing back...")
-
