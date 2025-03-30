@@ -4,11 +4,11 @@ from ntfs import NTFS
 from offset_reader import read_offset_in_hex, read_offset_in_dec, read_offset_in_string, print_hex
 from converter import byte_converter
 import datetime
+import subprocess
 
 def partition_selection():
     # Ask user to input a valid drive letter
     while True:
-        print("------------------------------------------------")
         # List to hold all valid partitions
         supported_partitions = {}
 
@@ -41,7 +41,7 @@ def partition_selection():
             continue
 
         if choice == "BACK": # Terminate
-            print("Thank you, bye bye")
+            print("Exit program")
             exit(0)
 
         # Check if the input is a valid drive letter
@@ -73,76 +73,94 @@ def deleted_files(instance, mode = "quick"):
 
 def partition_process():
     print("------------------------------------------------")
-    print("     Nguyen Dinh Nhan's Disk Recovery Tool")
     disk = partition_selection()
     #print_hex(read_offset_in_hex(disk['disk'], disk['first_offset'], 512)) # Print master boot sector
 
     if disk['format'] == "FAT32":
         instance = FAT32(disk = disk['disk'], first_offset = disk['first_offset'])
+
+       
+ 
+        #del_items = deleted_files(instance) # Scan RDET first by defaultelif format == "NTFS":
+        while True:
+            print("------------------------------------------------")
+            print("Choose any files to recover by typing their file indexes (eg. 4 17)")
+            print("Type QUICK to scan quickly.")
+            print("Type FULL to scan deeply.")
+            print("Type BACK to return to partition choices.")
+            print("Command: ", end="")
+            choice = input().strip().upper()  # Get the user's input and convert it to uppercase
+
+            if choice == "":
+                continue
+
+            if choice == "BACK":
+                return partition_process()
+            
+            if choice == "QUICK":
+                del_items = deleted_files(instance)
+                continue
+            
+            if choice == "FULL":
+                del_items = deleted_files(instance, "full")
+                continue
+
+            file_index_str = choice.split()
+            file_index = []
+
+            # Check conditions
+            try:
+                for index in file_index_str:
+                    value = int(index)
+                    file_index.append(value)
+                    if 0 <= value < len(del_items):
+                        continue
+                    else:
+                        1 / 0 # Raise any errors to exit  
+                    
+            except:
+                print("Invalid selection. Please make sure all selections are valid and within allowed range.")
+                continue
+
+            print("Note: We recommend not to choose the recovery partition to prevent data loss.")
+            print("Destination (where you want to save, eg. C:\\Program Files): ", end="")
+            dest = input().strip().upper()  # Get the user's input and convert it to uppercase
+
+            try:
+                complete = 0
+                print("Recovering...\nCompleted 0%")
+                for index, item in enumerate(del_items):
+                    if index in file_index:
+                        current_datetime = datetime.datetime.now()
+                        formatted_datetime = current_datetime.strftime("%d-%m-%Y_%H-%M-%S")
+                        print(f"\nCreating {dest}\\{formatted_datetime}_{item["name"]} | recover from {item["name"]}, index #{index}")
+
+                        instance.recover_data(f"{dest}\\{formatted_datetime}_{item["name"]}", item)
+
+                        complete += 1
+                        print(f"Completed {complete / len(file_index) * 100:.1f}%")
+            except Exception as e:
+                print("Something went wrong... Please try again")
+                print(f"Error: {e}")
+            print("\nDone\nComing back...")
+
+
     else:
-        instance = NTFS(disk = disk['disk'], first_offset = disk['first_offset'])
+        while True:
+            print("------------------------------------------------")
+            print("Type CONTINUE to delete.")
+            print("Type BACK to return to partition choices.")
+            print("Command: ", end="")
+            choice = input().strip().upper()  # Get the user's input and convert it to uppercase
 
-    del_items = deleted_files(instance) # Scan RDET first by default
+            if choice == "BACK":
+                return partition_process()
+            
+            if choice == "" or choice == "CONTINUE":
+                pattern = input("Recover files (Eg. *.jpg): ")
+                outdir = input(r"Destination (where you want to save, eg. C:\Program Files): ").rstrip('"')
 
-    while True:
-        print("------------------------------------------------")
-        print("Choose any files to recover by typing their file indexes (eg. 4 17)")
-        print("Type QUICK to scan quickly.")
-        print("Type FULL to scan deeply.")
-        print("Type BACK to return to partition choices.")
-        print("Command: ", end="")
-        choice = input().strip().upper()  # Get the user's input and convert it to uppercase
-
-        if choice == "":
-            continue
-
-        if choice == "BACK":
-            return partition_process()
-        
-        if choice == "QUICK":
-            del_items = deleted_files(instance)
-            continue
-        
-        if choice == "FULL":
-            del_items = deleted_files(instance, "full")
-            continue
-
-        file_index_str = choice.split()
-        file_index = []
-
-        # Check conditions
-        try:
-            for index in file_index_str:
-                value = int(index)
-                file_index.append(value)
-                if 0 <= value < len(del_items):
-                    continue
-                else:
-                    1 / 0 # Raise any errors to exit  
-                
-        except:
-            print("Invalid selection. Please make sure all selections are valid and within allowed range.")
-            continue
-
-        print("Note: We recommend not to choose the recovery partition to prevent data loss.")
-        print("Destination (where you want to save, eg. C:\Program Files): ", end="")
-        dest = input().strip().upper()  # Get the user's input and convert it to uppercase
-
-        try:
-            complete = 0
-            print("Recovering...\nCompleted 0%")
-            for index, item in enumerate(del_items):
-                if index in file_index:
-                    current_datetime = datetime.datetime.now()
-                    formatted_datetime = current_datetime.strftime("%d-%m-%Y_%H-%M-%S")
-                    print(f"\nCreating {dest}\\{formatted_datetime}_{item["name"]} | recover from {item["name"]}, index #{index}")
-
-                    instance.recover_data(f"{dest}\\{formatted_datetime}_{item["name"]}", item)
-
-                    complete += 1
-                    print(f"Completed {complete / len(file_index) * 100:.1f}%")
-        except Exception as e:
-            print("Something went wrong... Please try again")
-            print(f"Error: {e}")
-        print("\nDone\nComing back...")
+                cmd = ['python', 'ntfsrecover.py', f"\\\\.\\{disk['letter']}", '--pattern', pattern, '--outdir', outdir]
+                subprocess.run(cmd, check=True)
+                return
 
