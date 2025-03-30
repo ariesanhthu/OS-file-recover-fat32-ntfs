@@ -157,10 +157,14 @@ def partition_process():
                 return partition_process()
             
             if choice == "" or choice == "CONTINUE":
+                cmd = ['python', 'ntfsrecover.py', f"\\\\.\\{disk['letter']}"]
+
+                subprocess.run(cmd, check=True)
+
                 pattern = input("Recover files (Eg. *.jpg): ")
                 outdir = input(r"Destination (where you want to save, eg. C:\Program Files): ").rstrip('"')
 
                 cmd = ['python', 'ntfsrecover.py', f"\\\\.\\{disk['letter']}", '--pattern', pattern, '--outdir', outdir]
                 subprocess.run(cmd, check=True)
-                return
+                # return
 
