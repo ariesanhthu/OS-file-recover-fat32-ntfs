@@ -215,10 +215,14 @@ def save_file(mfti, destfn):
         except OSError:
             pass
 
-    with open_output_file(destfn) as outf:
+    with open_output_file(destfn) as outf:        
         outf.write(mfti['DATA'][None]())
 
+    print(destfn)
+
     for ads in mfti['DATA']:
+        print(ads)
+
         if ads is None:
             continue
         with open_output_file(destfn + '~' + ads) as outf:
@@ -261,8 +265,10 @@ def main(argv):
     bps, spc = struct.unpack('<HB', readat(f, 0xb, 3))
     if args.sector_size:
         bps = args.sector_size
+
     if args.cluster_size:
         spc = args.cluster_size
+    
     bpc = bps * spc
 
     mft_clust, mftmirr_clust, clust_per_mft = struct.unpack('<QQB', readat(f, 0x30, 17))
@@ -288,8 +294,11 @@ def main(argv):
         except Exception as e:
             fullpath = '__ORPHANED__/' + fn
 
+        # args.pattern = fn
+        
+        # nếu không truyền tham số pattern thì tiếp tục
         if not args.pattern:
-            print(fullpath)
+            # print(fullpath)
             continue
 
         for pat in args.pattern:

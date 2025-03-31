@@ -1,6 +1,6 @@
 import mbr
 from fat32 import FAT32
-from ntfs import NTFS
+# from ntfs import NTFS
 from offset_reader import read_offset_in_hex, read_offset_in_dec, read_offset_in_string, print_hex
 from converter import byte_converter
 import datetime
@@ -146,25 +146,24 @@ def partition_process():
 
 
     else:
-        while True:
-            print("------------------------------------------------")
-            print("Type CONTINUE to delete.")
-            print("Type BACK to return to partition choices.")
-            print("Command: ", end="")
-            choice = input().strip().upper()  # Get the user's input and convert it to uppercase
+        print("------------------------------------------------")
+        print("Type CONTINUE to delete.")
+        print("Type BACK to return to partition choices.")
+        print("Command: ", end="")
+        choice = input().strip().upper()  # Get the user's input and convert it to uppercase
 
-            if choice == "BACK":
-                return partition_process()
-            
-            if choice == "" or choice == "CONTINUE":
-                cmd = ['python', 'ntfsrecover.py', f"\\\\.\\{disk['letter']}"]
+        if choice == "BACK":
+            return partition_process()
+        
+        if choice == "" or choice == "CONTINUE":
+            # cmd = ['python', 'ntfsrecover.py', f"\\\\.\\{disk['letter']}"]
 
-                subprocess.run(cmd, check=True)
+            # subprocess.run(cmd, check=True)
 
-                pattern = input("Recover files (Eg. *.jpg): ")
-                outdir = input(r"Destination (where you want to save, eg. C:\Program Files): ").rstrip('"')
+            # pattern = input("Recover files (Eg. *.jpg): ")
+            # outdir = input(r"Destination (where you want to save, eg. C:\Program Files): ").rstrip('"')
 
-                cmd = ['python', 'ntfsrecover.py', f"\\\\.\\{disk['letter']}", '--pattern', pattern, '--outdir', outdir]
-                subprocess.run(cmd, check=True)
-                # return
-
+            # cmd = ['python', 'ntfs.py', f"\\\\.\\{disk['letter']}", '--pattern', pattern, '--outdir', outdir]
+            cmd = ['python', 'ntfs.py', disk['letter']]
+            subprocess.run(cmd, check=True)
+            # return

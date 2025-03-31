@@ -1,202 +1,362 @@
-from offset_reader import read_offset_in_hex, read_offset_in_dec, read_offset_in_string, print_hex
-from converter import byte_converter
+import struct
+import sys
+import os
 
-class NTFS:
-    def __init__(self, disk, first_offset):
-        self.begin = first_offset
-        self.disk = disk
-        self.sector_size = self.read_offset(0x0B, 2) # Sector size in bytes
-        self.cluster_size = self.get_cluster_size()  # Cluster size in bytes
-        self.mft_start = self.get_mft_start()        # MFT starting offset
 
-#     def read_offset(self, offset, size):
-#         return read_offset_in_dec(self.disk, self.begin + offset, size)
+def read_boot_sector(disk_path):
+    with open(disk_path, "rb") as f:
+        return f.read(512)
 
-#     def get_cluster_size(self):
-#         # Read cluster size from boot sector
-#         sectors_per_cluster = self.read_offset(0x0D, 1)
-#         return sectors_per_cluster * self.sector_size
 
-#     def get_mft_start(self):
-#         # Read MFT start position 
-#         mft_start_cluster = self.read_offset(0x30, 8)
-#         return self.begin + mft_start_cluster * self.cluster_size
+def parse_boot_sector(boot_sector):
+    # Lấy số byte/sector (offset 11, 2 byte, little-endian)
+    bytes_per_sector = struct.unpack_from("<H", boot_sector, 11)[0]
+    # Lấy số sector/cluster (offset 13, 1 byte)
+    sectors_per_cluster = struct.unpack_from("B", boot_sector, 13)[0]
+    cluster_size = bytes_per_sector * sectors_per_cluster
+    # Lấy số cluster của $MFT (offset 48, 8 byte little-endian, có dấu)
+    mft_cluster = struct.unpack_from("<q", boot_sector, 48)[0]
+    return bytes_per_sector, sectors_per_cluster, cluster_size, mft_cluster
 
-#     def read_mft_entry(self, entry_number):
-#         """Read a MFT entry"""
-#         offset = self.mft_start + (entry_number * 1024)  # Commonly an entry size = 1024
-#         return read_offset_in_hex(self.disk, offset, 1024)
 
-#     # def scan_quick(self):
-#     #     """Liệt kê tất cả các file đã bị xóa kèm kích thước và địa chỉ offset"""
-#     #     deleted_files = []
-#     #     entry_number = 0  # Bắt đầu từ entry đầu tiên trong MFT
+def read_mft_entry(disk_path, mft_offset, record_index, entry_size=1024):
+    with open(disk_path, "rb") as f:
+        f.seek(mft_offset + record_index * entry_size)
+        return f.read(entry_size)
 
-#     #     while True:
-#     #         try:
-#     #             # Đọc một entry trong MFT
-#     #             mft_entry = self.read_mft_entry(entry_number)
 
-#     #             # Kiểm tra xem entry có hợp lệ không (chữ ký 'FILE')
-#     #             if mft_entry[:4] != b"FILE":
-#     #                 entry_number += 1
-#     #                 continue
+def parse_mft_record(record):
+    # Kiểm tra signature: phải bắt đầu bằng b'FILE'
+    signature = record[0:4]
+    if signature != b"FILE":
+        return None
+    sequence = struct.unpack_from("<H", record, 4)[0]
+    flags = struct.unpack_from("<H", record, 22)[0]
 
-#     #             # Kiểm tra cờ trạng thái (đã xóa hay không)
-#     #             flags = int.from_bytes(mft_entry[0x16:0x18], "little")
-#     #             if flags != 0x00:  # Không phải entry đã xóa
-#     #                 entry_number += 1
-#     #                 continue
+    return {"signature": signature, "sequence": sequence, "flags": flags}
 
-#     #             # Địa chỉ offset đầu tiên của entry này
-#     #             offset_entry = self.mft_start + entry_number * 1024
 
-#     #             # Lấy danh sách các attribute trong entry
-#     #             offset = int.from_bytes(mft_entry[0x14:0x16], "little")
-#     #             filename = None
-#     #             file_size = None
+def parse_data_runs(data):
+    runs = []
+    pos = 0
+    last_lcn = 0
+    while pos < len(data):
+        header = data[pos]
+        pos += 1
+        if header == 0:
+            break
+        length_size = header & 0x0F
+        offset_size = (header >> 4) & 0x0F
 
-#     #             while offset < len(mft_entry):
-#     #                 # Đọc loại attribute và kích thước
-#     #                 attr_type = int.from_bytes(mft_entry[offset:offset + 4], "little")
-#     #                 attr_len = int.from_bytes(mft_entry[offset + 4:offset + 8], "little")
+        # Đọc run length
+        run_length = int.from_bytes(data[pos : pos + length_size], "little")
+        pos += length_size
 
-#     #                 if attr_type == 0xFFFFFFFF:  # Hết danh sách attribute
-#     #                     break
+        # Xử lý sparse run (offset_size = 0)
+        if offset_size == 0:
+            runs.append((None, run_length))  # Đánh dấu sparse run
+            continue
 
-#     #                 # Attribute $FILE_NAME
-#     #                 if attr_type == 48:
-#     #                     content_offset = offset + int.from_bytes(mft_entry[offset + 20:offset + 22], "little")
-#     #                     name_len = mft_entry[content_offset + 64]  # Độ dài tên file (UTF-16)
-#     #                     name_offset = content_offset + 66
+        # Đọc run offset
+        run_offset = int.from_bytes(
+            data[pos : pos + offset_size], byteorder="little", signed=True
+        )
+        pos += offset_size
 
-#     #                     # Lấy tên file theo UTF-16
-#     #                     filename = mft_entry[name_offset:name_offset + (name_len * 2)].decode("utf-16le", errors="ignore")
+        # Tính absolute LCN
+        if not runs:
+            lcn = run_offset  # Run đầu: absolute
+        else:
+            lcn = last_lcn + run_offset  # Run sau: relative
 
-#     #                 # Attribute $DATA
-#     #                 if attr_type == 128:  # Attribute $DATA
-#     #                     content_offset = offset + int.from_bytes(mft_entry[offset + 20:offset + 22], "little")
-#     #                     real_size = int.from_bytes(mft_entry[content_offset + 48:content_offset + 56], "little")
-#     #                     file_size = real_size
+        runs.append((lcn, run_length))
+        last_lcn = lcn
+    return runs
 
-#     #                 offset += attr_len  # Chuyển sang attribute tiếp theo
 
-#     #             if file_size == None:
-#     #                 continue
+def get_file_name(record):
+    """
+    Quét qua các attribute của bản ghi MFT để tìm attribute $FILE_NAME (type 0x30).
+    Trong attribute resident, tại offset 64 chứa độ dài file name (số ký tự),
+    sau đó file name (mã hóa UTF-16LE) bắt đầu từ offset 66.
+    """
+    first_attr_offset = struct.unpack_from("<H", record, 20)[0]
+    pos = first_attr_offset
+    while pos < len(record):
+        attr_type = struct.unpack_from("<I", record, pos)[0]
+        if attr_type == 0 or attr_type == 0xFFFFFFFF:
+            break
+        attr_length = struct.unpack_from("<I", record, pos + 4)[0]
+        # Nếu attribute $FILE_NAME (type 0x30)
+        if attr_type == 0x30:
+            non_resident_flag = record[pos + 8]
+            if non_resident_flag == 0:  # resident attribute
+                content_length = struct.unpack_from("<I", record, pos + 16)[0]
+                content_offset = struct.unpack_from("<H", record, pos + 20)[0]
+                content_start = pos + content_offset
+                # Kiểm tra độ dài tối thiểu để chứa thông tin file name
+                if content_length >= 66:
+                    file_name_length = record[content_start + 64]
+                    name_bytes = record[
+                        content_start + 66 : content_start + 66 + file_name_length * 2
+                    ]
+                    try:
+                        filename = name_bytes.decode("utf-16le")
+                        return filename
+                    except Exception as e:
+                        return None
+            else:
+                # Thông thường $FILE_NAME được lưu resident
+                pass
+        pos += attr_length
+    return None
 
-#     #             print(f"Scanning: Filename: {filename}, size: {byte_converter(file_size)}")
-#     #             deleted_files.append({
-#     #                 "name": filename,
-#     #                 "file_size": file_size,
-#     #                 "first_offset": offset_entry
-#     #             })
 
-#     #             entry_number += 1  # Chuyển sang entry tiếp theo
+def list_deleted_files(disk_path, mft_offset, total_records, cluster_size):
+    """
+    Quét qua các bản ghi MFT từ 0 đến total_records.
+    Với mỗi bản ghi hợp lệ (có signature 'FILE') mà flag không chứa bit 0x0001 (allocated)
+    => xem là file đã xóa.
+    In ra số thứ tự bản ghi, tên file và phần mở rộng (nếu có).
+    """
+    print("\n--- Danh sách file đã xóa ---")
+    for record_index in range(total_records):
+        record = read_mft_entry(disk_path, mft_offset, record_index)
+        hdr = parse_mft_record(record)
+        if hdr is None:
+            continue
+        # Nếu flag có bit 0x0001, tức file đang được phân bổ => không bị xóa
+        if hdr["flags"] & 0x0001:
+            continue
+        filename = get_file_name(record)
+        if filename is None or filename == "":
+            continue
+        # Lấy phần mở rộng file (nếu có)
+        parts = filename.rsplit(".", 1)
+        extension = parts[1] if len(parts) == 2 else ""
+        print(f"Record {record_index}: {filename} (extension: {extension})")
 
-#     #         except:
-#     #             # Kết thúc nếu không đọc được entry tiếp theo
-#     #             break
 
-#     #     return deleted_files
+def lznt1_decompress(src):
+    """
+    Một implement LZNT1 decompression đơn giản.
+    LZNT1 nén dữ liệu theo từng chunk (tối đa 4096 byte).
+    Chú ý: Đây là một phiên bản đơn giản, có thể không xử lý hết mọi trường hợp.
+    """
+    dest = bytearray()
+    pos = 0
+    src_len = len(src)
+    # LZNT1 nén theo từng chunk, mỗi chunk có header 2 byte.
+    while pos < src_len:
+        # Nếu không đủ header thì thoát.
+        if pos + 2 > src_len:
+            break
+        (chunk_header,) = struct.unpack_from("<H", src, pos)
+        pos += 2
+        # Lower 12 bit: kích thước chunk - 1
+        chunk_size = (chunk_header & 0x0FFF) + 1
+        # Nếu high bit được đặt, chunk là uncompressed
+        is_compressed = (chunk_header & 0x8000) == 0
+        if not is_compressed:
+            # Chưa nén: copy chunk_size byte
+            dest += src[pos : pos + chunk_size]
+            pos += chunk_size
+        else:
+            # Chunk nén: xử lý cho đến hết chunk_size
+            chunk_end = pos + chunk_size
+            while pos < chunk_end:
+                flag = src[pos]
+                pos += 1
+                for bit in range(8):
+                    if pos >= chunk_end:
+                        break
+                    if flag & (1 << bit):
+                        # Token 2 byte, copy từ dữ liệu đã được giải nén
+                        if pos + 2 > chunk_end:
+                            break
+                        token = struct.unpack_from("<H", src, pos)[0]
+                        pos += 2
+                        copy_length = (token >> 12) + 3
+                        copy_offset = token & 0x0FFF
+                        for _ in range(copy_length):
+                            if copy_offset > len(dest) or len(dest) == 0:
+                                # Nếu offset không hợp lệ, append 0
+                                dest.append(0)
+                            else:
+                                dest.append(dest[-copy_offset])
+                    else:
+                        # Literal byte: copy trực tiếp
+                        dest.append(src[pos])
+                        pos += 1
+    return bytes(dest)
 
-#     # def scan_full(self):
-#     #     return self.scan_quick()
-    
-#     # def recover_data(self, path, item):
-#     #     """
-#     #     Phục hồi file đã xóa từ thông tin item.
-#     #     item bao gồm:
-#     #     - name: Tên file
-#     #     - file_size: Kích thước file
-#     #     - first_offset: Offset của MFT entry chứa file
-#     #     """
-#     #     filename = item.get("name")
-#     #     file_size = item.get("file_size")
-#     #     file_offset = item.get("first_offset")
 
-#     #     if not filename or file_size is None or file_offset is None:
-#     #         raise ValueError("Thiếu thông tin trong item để phục hồi.")
+def recover_file_from_mft(
+    disk_path, mft_offset, record_index, cluster_size, output_file
+):
+    record = read_mft_entry(disk_path, mft_offset, record_index)
+    hdr = parse_mft_record(record)
+    if hdr is None:
+        print(f"Bản ghi MFT {record_index} không hợp lệ.")
+        return
 
-#     #     # Đọc MFT entry từ first_offset
-#     #     mft_entry = read_offset_in_hex(self.disk, file_offset, 1024)
+    # Nếu người dùng không nhập phần mở rộng cho file phục hồi, bổ sung vào output_file
+    if not os.path.splitext(output_file)[1]:
+        fname = get_file_name(record)
+        if fname:
+            parts = fname.rsplit(".", 1)
+            if len(parts) == 2 and parts[1]:
+                ext = parts[1]
+                output_file = output_file + "." + ext
+                print(f"Đã bổ sung phần mở rộng vào file phục hồi: {output_file}")
 
-#     #     # Kiểm tra chữ ký 'FILE' trong entry
-#     #     if mft_entry[:4] != b"FILE":
-#     #         raise ValueError(f"Entry tại offset {file_offset} không hợp lệ.")
+    print(
+        f"\nĐang xử lý bản ghi MFT {record_index}: sequence {hdr['sequence']} flags {hdr['flags']}"
+    )
 
-#     #     # Kiểm tra Runlist trong $DATA
-#     #     offset = int.from_bytes(mft_entry[0x14:0x16], "little")
-#     #     runlist = None
+    # Quét qua các attribute từ offset được chỉ định ở byte 20
+    first_attr_offset = struct.unpack_from("<H", record, 20)[0]
+    pos = first_attr_offset
+    data_runs = None
+    real_size = None
+    comp_unit = 0  # Compression Unit; nếu != 0, file được nén
+    while pos < len(record):
+        attr_type = struct.unpack_from("<I", record, pos)[0]
+        if attr_type == 0 or attr_type == 0xFFFFFFFF:
+            break
+        attr_length = struct.unpack_from("<I", record, pos + 4)[0]
+        non_resident_flag = record[pos + 8]
+        # Tìm attribute $DATA (type 0x80)
+        if attr_type == 0x80:
+            if non_resident_flag == 1:
+                data_run_offset = struct.unpack_from("<H", record, pos + 32)[0]
+                comp_unit = struct.unpack_from("<H", record, pos + 34)[0]
+                real_size = struct.unpack_from("<Q", record, pos + 48)[0]
+                data_runs_data = record[pos + data_run_offset : pos + attr_length]
+                data_runs = parse_data_runs(data_runs_data)
+                print(
+                    "Data runs:",
+                    data_runs,
+                    "Real file size:",
+                    real_size,
+                    "Compression Unit:",
+                    comp_unit,
+                )
+                break
+            else:
+                resident_data_length = struct.unpack_from("<I", record, pos + 16)[0]
+                resident_data_offset = struct.unpack_from("<H", record, pos + 20)[0]
+                data = record[
+                    pos
+                    + resident_data_offset : pos
+                    + resident_data_offset
+                    + resident_data_length
+                ]
+                with open(output_file, "wb") as f:
+                    f.write(data)
+                print("File (resident) phục hồi thành công tại:", output_file)
+                return
+        pos += attr_length
 
-#     #     while offset < 1024:
-#     #         attr_type = int.from_bytes(mft_entry[offset:offset + 4], "little")
-#     #         attr_len = int.from_bytes(mft_entry[offset + 4:offset + 8], "little")
+    if data_runs is None:
+        print(
+            f"Không tìm thấy attribute $DATA non-resident trong bản ghi MFT {record_index}."
+        )
+        return
 
-#     #         if attr_type == 0xFFFFFFFF:  # Hết danh sách attribute
-#     #             break
+    if real_size is None:
+        print("Không lấy được kích thước file thực (real size).")
+        return
 
-#     #         if attr_type == 128:  # Attribute $DATA
-#     #             content_offset = offset + int.from_bytes(mft_entry[offset + 20:offset + 22], "little")
-#     #             runlist_offset = content_offset + 0x10  # Runlist bắt đầu sau 0x10 bytes
-#     #             runlist = mft_entry[runlist_offset:runlist_offset + (attr_len - 0x10)]
-#     #             break
+    # Đọc dữ liệu thô từ data runs
+    raw_data = bytearray()
+    remaining = real_size
+    with open(disk_path, "rb") as disk:
+        for lcn, run_length in data_runs:
+            # Xử lý sparse run nếu có (lcn is None)
+            if lcn is None:
+                raw_data += b"\x00" * (run_length * cluster_size)
+                remaining -= run_length * cluster_size
+                if remaining <= 0:
+                    break
+                continue
 
-#     #         offset += attr_len
+            offset = lcn * cluster_size
+            byte_length = run_length * cluster_size
+            to_read = min(byte_length, remaining)
+            print(
+                f"Đang đọc data run: LCN={lcn}, length={run_length} clusters, offset={offset}, bytes={to_read}"
+            )
+            disk.seek(offset)
+            chunk = disk.read(to_read)
+            raw_data += chunk
+            remaining -= len(chunk)
+            if remaining <= 0:
+                break
 
-#     #     if not runlist:
-#     #         raise ValueError(f"Không tìm thấy Runlist trong $DATA của file {filename}.")
+    # Nếu file được nén NTFS (comp_unit != 0), giải nén dữ liệu
+    if comp_unit != 0:
+        print("File được nén NTFS, thực hiện giải nén LZNT1.")
+        decompressed_data = lznt1_decompress(raw_data)
+    else:
+        decompressed_data = raw_data
 
-#     #     # Giải mã Runlist
-#     #     runs = self.decode_runlist(runlist)
-#     #     recovered_size = 0
+    with open(output_file, "wb") as out:
+        out.write(decompressed_data)
+    print("File phục hồi thành công tại:", output_file)
 
-#     #     # Mở file để ghi dữ liệu phục hồi
-#     #     with open(path, "wb") as output_file:
-#     #         for run in runs:
-#     #             start_cluster, cluster_count = run
-#     #             start_offset = self.begin + start_cluster * self.cluster_size
-#     #             run_size = cluster_count * self.cluster_size
+    with open(output_file, "rb") as f:
+        header = f.read(4)
+    print("Header bytes:", header.hex())
 
-#     #             if recovered_size + run_size > file_size:
-#     #                 run_size = file_size - recovered_size  # Giới hạn nếu run vượt quá file_size
 
-#     #             # Đọc dữ liệu từ ổ đĩa và ghi vào file
-#     #             data = read_offset_in_hex(self.disk, start_offset, run_size)
-#     #             output_file.write(data)
-#     #             recovered_size += run_size
+def main(argv):
+    # drive_letter = input("Nhập đường dẫn ổ đĩa (hoặc file ảnh đĩa): ").strip()
+    drive_letter = argv[0]
 
-#     #             # Kiểm tra nếu đã phục hồi đủ dữ liệu
-#     #             if recovered_size >= file_size:
-#     #                 break
+    disk_path = rf"\\.\{drive_letter}"
 
-#     def decode_runlist(self, runlist):
-#         """
-#         Giải mã Runlist từ $DATA để lấy danh sách các đoạn dữ liệu (cluster).
-#         """
-#         runs = []
-#         index = 0
-#         last_cluster = 0
+    boot_sector = read_boot_sector(disk_path)
+    bytes_per_sector, sectors_per_cluster, cluster_size, mft_cluster = (
+        parse_boot_sector(boot_sector)
+    )
+    print("Bytes per sector:", bytes_per_sector)
+    print("Sectors per cluster:", sectors_per_cluster)
+    print("Cluster size:", cluster_size)
+    print("$MFT cluster number:", mft_cluster)
+    mft_offset = mft_cluster * cluster_size
+    print("Calculated MFT offset:", mft_offset)
 
-#         while index < len(runlist):
-#             header = runlist[index]
-#             if header == 0x00:  # Kết thúc Runlist
-#                 break
+    while True:
+        choice = (
+            input(
+                "\nNhập 'L' để liệt kê các file đã xóa, 'R' để phục hồi file theo record index, nhập bất kỳ để thoát: "
+            )
+            .strip()
+            .upper()
+        )
+        if choice == "L":
+            try:
+                total = int(input("Nhập số lượng bản ghi MFT cần quét (ví dụ: 1000): "))
+            except:
+                total = 1000
+            list_deleted_files(disk_path, mft_offset, total, cluster_size)
+        elif choice == "R":
+            try:
+                record_index = int(
+                    input("Nhập số thứ tự bản ghi MFT của file cần phục hồi: ")
+                )
+            except:
+                print("Giá trị không hợp lệ.")
+                sys.exit(1)
+            output_file = input("Nhập tên file phục hồi đầu ra: ").strip()
+            recover_file_from_mft(
+                disk_path, mft_offset, record_index, cluster_size, output_file
+            )
+        else:
+            exit()
 
-#             # Đọc size, offset size từ header
-#             cluster_size_len = header & 0x0F
-#             cluster_offset_len = (header >> 4) & 0x0F
-#             index += 1
 
-#             # Đọc cluster size và cluster offset
-#             cluster_size = int.from_bytes(runlist[index:index + cluster_size_len], "little", signed=False)
-#             cluster_offset = int.from_bytes(runlist[index + cluster_size_len:index + cluster_size_len + cluster_offset_len], "little", signed=True)
-#             index += cluster_size_len + cluster_offset_len
-
-#             # Tính toán vị trí cluster thực
-#             start_cluster = last_cluster + cluster_offset
-#             runs.append((start_cluster, cluster_size))
-
-#             # Lưu cluster cuối để tính toán giá trị tiếp theo
-#             last_cluster = start_cluster
-
-#         return runs
+if __name__ == "__main__":
+    import sys
+    exit(main(sys.argv[1:]))
