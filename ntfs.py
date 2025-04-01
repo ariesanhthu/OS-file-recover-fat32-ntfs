@@ -139,9 +139,7 @@ def list_deleted_files(disk_path, mft_offset, total_records, cluster_size):
 
 def lznt1_decompress(src):
     """
-    Một implement LZNT1 decompression đơn giản.
     LZNT1 nén dữ liệu theo từng chunk (tối đa 4096 byte).
-    Chú ý: Đây là một phiên bản đơn giản, có thể không xử lý hết mọi trường hợp.
     """
     dest = bytearray()
     pos = 0
@@ -252,8 +250,10 @@ def recover_file_from_mft(
                     + resident_data_offset
                     + resident_data_length
                 ]
+
                 with open(output_file, "wb") as f:
                     f.write(data)
+
                 print("File (resident) phục hồi thành công tại:", output_file)
                 return
         pos += attr_length
@@ -305,10 +305,6 @@ def recover_file_from_mft(
         out.write(decompressed_data)
     print("File phục hồi thành công tại:", output_file)
 
-    with open(output_file, "rb") as f:
-        header = f.read(4)
-    print("Header bytes:", header.hex())
-
 
 def main(argv):
     # drive_letter = input("Nhập đường dẫn ổ đĩa (hoặc file ảnh đĩa): ").strip()
@@ -354,7 +350,7 @@ def main(argv):
                 disk_path, mft_offset, record_index, cluster_size, output_file
             )
         else:
-            exit()
+            return
 
 
 if __name__ == "__main__":
